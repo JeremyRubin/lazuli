@@ -1,70 +1,202 @@
 \documentclass{article}
 
 \usepackage{microtype}
+
 \usepackage{amsmath}
+\usepackage{verbatim}
 \usepackage{amssymb}
+\usepackage[procnames]{listings}
+
+\usepackage{color}
 
 \author{Jeremy Rubin}
-\title{Efficiently Batch Generating N-of-N ECDSA Threshold Single Signatures}
+\title{Efficiently Batch Generating N-of-N ECDSA Threshold Single Signatures in a Semi-Honest Model}
 
-
-\newcommand{\addencrypt}{\varepsilon_{+}}
-\newcommand{\adddecrypt}{\delta_{+}}
-\newcommand{\mulencrypt}{\varepsilon_{*}}
-\newcommand{\muldecrypt}{\delta_{*}}
+\definecolor{keywords}{RGB}{255,0,90}
+\definecolor{comments}{RGB}{0,0,113}
+\definecolor{red}{RGB}{160,0,0}
+\definecolor{green}{RGB}{0,150,0}
+ 
+\lstset{language=Python, 
+        basicstyle=\ttfamily\small, 
+        keywordstyle=\color{keywords},
+        commentstyle=\color{comments},
+        stringstyle=\color{red},
+        showstringspaces=false,
+        identifierstyle=\color{green},
+        procnamekeys={def,class}}
+        
+        
+\newcommand{\addencrypt}{\varepsilon^{+}}
+\newcommand{\adddecrypt}{\delta^{+}}
+\newcommand{\mulencrypt}{\varepsilon^{*}}
+\newcommand{\muldecrypt}{\delta^{*}}
 \newcommand{\mulOT}{\pi_{*}}
 
 \begin{document}
 \maketitle
+
+\begin{abstract}
+Semi-Honest batch generated N-of-N ECDSA threshold single signatures are a useful new tool for building backwards-compatible smart contracts for Bitcoin.
+
+Protocols for N-of-N threshold ECDSA have been demonstrated previously, but this protocol is unique because it takes advantage of a semi-honest model to eliminate expensive and complicated consistency checks.
+
+Non backwards compatible schemes -- such as Schnorr Signatures, which requires modifications to Bitcoin -- have also been demonstrated previously, but because they require changes they are not guaranteed to be available or accepted.
+\end{abstract}
 
 \section{Assumptions}
 
 
 \subsection{Elliptic Curves}
 
-Assume a curve with a base point 
-Let $$(x_G, y_G) = G$$
-and order $N$.
+Assume a curve with a base point denoted $G = (x_G, y_G)$ of order $N$ (e.g. Secp256k1).
 
-\subsection{Additive Homomorphic Encryption}
+
+
+\subsection{Semi-Honest Oblivious Transfer Multiplication}
+
+Assume a protocol whereby two participants with a secret $a$ and $b$, can each learn a new secret share $\tau_a$ and $\tau_b$ such that $\tau_a + \tau_b = a\cdot b$ without either party learning anything about $a$, $b$, or $ab$. If the protocol fails, both parties may learn $a$ and $b$. if the protocol succeeds, only $\tau_a, \tau_b$ are learned.
+
+We denote this scheme $\mulOT(a,b) = ab = \tau_a + \tau_b$. 
+
+\subsection{Efficient OT Multiplication Protocol}
+
+Alice with an $d$-bit $\alpha$, and a radix $r | d$, computes $\forall j \in 0\cdots 2^d -1. c_j \equiv  a \times j \mod N$.
+
+Alice then picks a set of $\frac{d}{r}$ blinding factors $\phi_i \xleftarrow{R} (0, N)$.
+
+Alice's secret share $\sigma_a \equiv \sum\limits_{i=0}^{r-1} \phi_i \times 256^{i\frac{d}{r}} \mod N$
+
+Alice then computes $\forall i \in [0, \frac{d}{r}). \forall j \in [0, 2^{\frac{d}{r}}). x_{i, j} \equiv c_j - \phi_i \mod N$. In other words, $x_{i,*}$ is a table of the potential blinded results of multiplying $a$ by all possible $\frac{d}{r}$-bit values.
+
+For each row of this table, Alice does a $1-of-2^\frac{d}{r}$ Oblivious Transfer. 
+If $r = d$, Alice can perform a direct OT. With $\frac{d}{r} > 1$, it may make sense to use a combination of keys to perform the transfer as follows:
+
+\subsubsection{1-of-N OT}
+Alice then picks a $r$ sets of $\frac{d}{r}$ pairs of encryption keys, $k^{b_{n\in {0,1}}}_{i\in [0,r),j \in [0,\frac{d}{r})}$.
+
+For each table $x_{i, *}$, Alice encrypts each entry $x_{i,j}$ under all the keys $k^{b_n}_{i,j}$ such that the $b_n$th is the $n$th bit of $j$. E.g. if Bob's byte were $\texttt{0xAA}$, the encryption would be. 
+
+$$enc(x_{i, \texttt{0xAA}}) = 
+\epsilon_{k^{1}_{i,0}}(\epsilon_{k^{0}_{i,1}}(\epsilon_{k^{1}_{i,2}}(\epsilon_{k^{0}_{i,3}}(\epsilon_{k^{1}_{i,4}}(\epsilon_{k^{0}_{i,5}}(\epsilon_{k^{1}_{i,6}}(\epsilon_{k^{0}_{i,7}}(x_{i,\texttt{0xAA}}))))))))
+$$
+
+Alice then puts each keypair inside a 1-of-2 Oblivious Transfer and sends them all to Bob.
+
+
+Bob, then inputs his value $\beta$ broken up into $r$-bit groups into the OT protocol and learns and sums the results $\sigma_b \equiv \sum\limits_{i=0}^{r-1} x_{i, \beta_i} \times 256^{i\frac{d}{r}} \mod N$.
+
+Thus,
+
+$$\sigma_a + \sigma_b = \alpha \cdot \beta$$
+
+
+The optimal selection of parameters for $d=256$ is $r=256$. Thus, concretely:
+
+$x =\begin{bmatrix}
+-\phi_0 & \alpha - \phi_0 \\
+\vdots & \vdots \\
+-\phi_i & \alpha - \phi_i \\
+\vdots & \vdots \\
+-\phi_{255} & \alpha - \phi_{255}
+\end{bmatrix}$
+
+And Bob learns, through oblivious transfer:
+
+$x_{*, \beta} = \left(x \odot \begin{bmatrix}
+\beta_0 = 0 & \beta_0 = 1 \\
+\vdots & \vdots \\
+\beta_i = 0 & \beta_i = 1 \\
+\vdots & \vdots \\
+\beta_{255} = 0 & \beta_{255} = 1
+\end{bmatrix}\right) \cdot \begin{bmatrix}
+1\\ 1
+\end{bmatrix}
+$
+
+And computes $\sigma_b = x_{*,\beta} \cdot 1^{255}$.
+
+The cost of this is $256*256 = 65536$ Oblivious Transfers.
+
+\subsubsection{Transfer Multiplication From Homomorphic Encryption}
+
+A version of this primitve can be constructed from additive homomorphic encryption. 
+
+It's easier to explain, but requires new crypto assumptions.
+\paragraph{Additive Homomorphic Encryption}
 
 Assume a protocol which encrypts values to ciphertexts under a given key that may be added
 and the sum decrypted without revealing the summands.
 
 We denote this
 
-$$\addencrypt(a) + \addencrypt(b) = \addencrypt(a+b)$$
-$$ a = \adddecrypt(\addencrypt(a)) $$
+$$\addencrypt_{pk}(a) + \addencrypt_{pk}(b) = \addencrypt_{pk}(a+b)$$
+$$ a = \adddecrypt_{sk}(\addencrypt_{pk}(a)) $$
 
-We also assume that such a scheme can be secret-shared so that we may use it to decrypt only with the approval of several parties.
+This also permits us to  multiply by a constant and add a constant
+$$a\cdot\addencrypt_{pk}(b) = \sum_1^a  \addencrypt_{pk}(b) = \addencrypt_{pk}(ab)$$
+$$a + \addencrypt_{pk}(b) = \addencrypt_{pk}(a) + \addencrypt_{pk}(b) = \addencrypt_{pk}(a+b)$$
+
+Assume that this protocol is perfectly hiding. E.g., $c = \addencrypt_{pk}(1)$ 
+cannot be derived by encrypting and comparing a second ciphertext $c' = \addencrypt_{pk}(1)$.
+This implies that the homomorphic encryption algorithm is non-deterministic.
+
+This scheme may be semi-honest because dependent on the homomorphic encryption scheme, attempting to decrypt a corrupted message may leak the key, but the message would be detected as corrupt.
+
+\paragraph{Multiplicative Share Computation }
+Alice has a value $a : [0; X]$ and Bob has a value $b : [0; X]$.
+
+Alice picks a random keypair $(pk, sk) \xleftarrow{R}$.
+
+Alice encrypts  $c_a = \addencrypt_{pk}(a \mod X)$ and sends it to Bob.
+
+Bob picks $\phi_0 \xleftarrow{R} [0; X]$ at random.
+
+Bob computes Alice's share homomorphically:
+
+$$b\cdot c_a - \phi_0 \mod N \equiv \addencrypt_{pk}(a\cdot b - \phi_0) \equiv \addencrypt_{pk}(\phi_1) \equiv c_{\phi_1}$$
+
+Bob then sends $c_{\phi_1}$ to Alice.
+
+Alice decrypts $c_{\phi_1}$ to get $\phi_1$.
+
+The identity
+$\phi_1 + \phi_0 \equiv a\cdot b \mod X$ holds for our shares.
+
+Bob learns nothing new in this protocol -- his share is a random number of his choice.
+
+Alice learns nothing new in this protocol -- Bob has perfectly blinded her share  with $\phi_0$.
 
 
-\subsection{Oblivious Transfer Multiplication}
 
-We also assume a protocol which allows us to compute, across two parties each knowing $a$ and $b$, $a\cdot b$ without either party learning $a$, $b$, or $ab$, but learning a share $s_1, s_2$ of $ab$ each such that $s_1+s_2 = ab$.
 
-We denote this scheme $\mulOT(a,b) = \tau_1 + \tau_2$. 
+
+
+
 
 \section{Protocol}
 
+The signature algorithm has three components, Reusable Nonce Generation, Single Use Key Generation, and Signing.
+
 \subsection{Reusable Nonce Generation}
-Let each party generate a secret $k_i$
+Our goal is to generate a nonce $K$ such that all participants learn
+$K\times G$ without learning $K$ and each party learns a secret share $\mu_i$ such that $K^{-1} = \sum_{i=1}^{n}\mu_i$.
 
-$$k_i \leftarrow [1, N-1]$$
+Let each party generate a secret $k_i$.
 
-Each party should also compute the multiplicative modular inverse
+$$k_i \xleftarrow{R} [1, N-1]$$
 
-Let $$q_i \leftarrow k_i^{-1} \mod N$$
+Each party also computes the multiplicative modular inverse of $k_i$, $q_i$. 
 
+$$q_i k_i \equiv 1 \mod N$$
 
-All parties compute the group element corresponding to the nonce without revealing their nonce.
-$$(x_0, y_0) = K \times G = \left(\prod_{i=1}^n  k_i\right) \times G = \left(\prod_{i=2}^n k_i\right) k_1 \times G = \ldots$$
+All parties compute the group element $K\times G$ corresponding to the nonce without revealing their nonce to anyone. This computation is done in a ring as demonstrated below.
 
-If needed, in order to prevent an attacker from chooser their nonce after observing the partial product, all participants can pre-share
-$H(k_i \times G)$. Then, they can prove that they valdly multiplied their previously chosen nonce by checking the value of 
-$K\times G^{n-1}$ corresponds with the product of all the hash preimages.
+$$(x_0, y_0) = K \times G = \left(\prod_{i=1}^n  k_i\right) \times G = \left(\prod_{i=2}^n k_i\right) k_1 \times G = \left(\prod_{i=3}^n k_i\right) k_2 k_1 \times G=\ldots$$
 
-Let $$ r = x_0 \mod N $$
+Precommits are not needed in this ring compution because breaking the nonce generation would reduce to a break in ECDLH assumption. An adverasy at $k_n$ has the ability to change $K\times G$ to a value of their choice. A later consistency check would fail were this done.
+
+The public nonce $r$ is computed as follows $ r = x_0 \mod N $.
 
 Next, we compute the inverse as a secret share using Oblivious Transfer Multiplication.
 \begin{equation*}
@@ -82,71 +214,114 @@ Next, we compute the inverse as a secret share using Oblivious Transfer Multipli
 \end{equation*}
  By proprerly ordering terms and aggregating shares known by a single party, we keep the total number of interactions to $O(n^2)$. Fortunately, much of this computation is parallelizable, so the total asymptotic time should be closer to $O(n)$ as we have $n$ participants.
 
-
 Note that in effect, $r$ is the aggregate public key and $\mu_i$ is a secret key known only to each participant.
 
+\subsubsection{Reusability and Privacy}
 
-Note that additional nonces may be cheaply generated by
-participants by generating securely among all participants (perhaps using fair
-coin flipping) a known $k'q' = 1 \mod N$ and multiplying $k'(K\times G)$ to get
+Additional nonces may be cheaply generated by
+participants by generating securely among all participants (perhaps using an efficient protocol like fair
+coin flipping over the phone) a second nonce $k'q' = 1 \mod N$ and multiplying $k'(K\times G)$ to get
 $r'$ and each share of $Q$ by $q'$. This assists in improving privacy of the
-protocol, but does not allow for keys to be reused.
+protocol, but does not allow for keys to be reused. There should not be an issue with the fact that a factor of the nonce is known. Trivially, half of nonces are factorable by 2, just knowing 2 and $2^{-1} \mod N$ does not allow an adversary to break half of signatures.
+
+This blinds the nonce from the public network which reduces linkability between transactions using the same nonce.
 
 
 \subsection{Single Use Key Generation}
 
 First, all parties generate a public key private key pair denoted.
 
-Let $$\alpha_i \leftarrow [1, N-1]$$
-Let $$\beta_i \leftarrow \alpha_i \times G$$
+Let $$\alpha_i \xleftarrow{R} [1, N-1]$$
+Let $$\beta_i = \alpha_i \times G$$
 
-Next, parties sum their public keys to produce an aggregate key $B$.
+Next, parties sum their public keys to produce an aggregate public key $B$.
 
 Let $$ B = \sum\limits_{i = 1}^n \beta_i = \left(\sum\limits_{i=1}^n \alpha_i\right) \times G$$
 
+It is critical that every $\beta_i$ is precommitted to before beginning the sum. Otherwise, an adverary may select $\beta_{adv} = \alpha_{adv}\times G - \beta_i$ to cancel out the $ith$ key.
 
-Then, the parties homomorphically add their keys to produce an aggregate secret
-key known to no individual party.
+\subsubsection{MuSig Key Aggregation}
 
-Let $$\addencrypt(A) = \sum\limits_{i=1}^n \addencrypt(\alpha_i)$$
+It is also possible to use MuSig Key Aggregation as follows:
 
-\subsection{Single Signing}
+Let $$\alpha_i \xleftarrow{R} [1, N-1]$$
+Let $$\beta_i = \alpha_i \times G$$
+Let $$L = H(\beta_1 ||\ldots || \beta_n)$$
+Let $$h_i = H(L || \beta_i)$$
+Let $$ B = \sum\limits_{i = 1}^n \beta_i\cdot h_i$$
+Let $$\alpha_i' = \alpha_i \cdot h_i$$
+This works in the plaintext model which eliminate extra rounds.
 
-We denote the desired message to be signed as $H(B || \ldots)$. This is to
-emphasize that the message may be arbitrary, and it may include B (thereby
-preventing using public key recovery schemes).
+The security of this construction is in the MuSig paper.
 
+The other benefit of this is that the keys would be compatible with Schnorr signatures once merged.
 
-First, using the encrypted single use private key, we compute the signatures
-internal $I$ value. Because $r$ is a scalar, we can compute multiplication
-through repeated addition (using standard well known optimizations) if our
-homomorphic scheme does not permit  more efficient computation.
-\begin{equation*}
-    \begin{split}
-        \addencrypt(I) & = r\addencrypt(A) + H(B || \ldots) \\
-        & = \sum_{1}^r \addencrypt(A) + H(B || \ldots) \\
-        & = \addencrypt(r \cdot A) + H(B || \ldots) \\
-        &= \addencrypt(r\cdot A) + \addencrypt(H(B || \ldots)) \\
-        &= \addencrypt(r\cdot A + H(B || \ldots)) 
-    \end{split}
-\end{equation*}
+\subsection{Semi-Honest Single Signing}
 
+Our goal is to compute the standard ECDSA signature equation
 
-Next, we compute the signature's s value by multiplying Q and I. Because we
-known additive shares of $Q$, $\mu_i$, we may have each party locally compute
-the scalar multiplication, sum the results, and then decrypt.
+$$\sigma = (r,s) = (r, K^{-1} ( M + r\cdot A) \mod N) $$
 
-Let $$ \addencrypt(s) = Q \cdot \addencrypt(I) 
-    = \left( \sum_{i=1}^n \mu_i \right) \cdot \addencrypt(I)
-    = \sum_{i=1}^n \left( \mu_i \cdot \addencrypt(I)\right)
-    = \sum_{i=1}^n \addencrypt(\mu_i I)
-    = \addencrypt(Q I) $$
-
-Let $$ s = \adddecrypt(\addencrypt(s)) \mod N$$
+without any party learning $K$, $A$, or any other shares of $K$ or $A$ against a semi-honest adversary for a known message $M$. In our semi-honest model successfully generating $\sigma$ -- such that $\sigma$ verifies as a standard-conforming ECDSA against the public key $B$ for message $M$ -- guarantees the adversary was honest and no information was leaked, and failing to finish the protocol for any reason may leak the keys. 
 
 
-Now, we verify $(r,s)$ as a standard-conforming ECDSA against the public key
-$B$ for message $H(B || \ldots)$.
+We set the desired message to be signed as $M=H(B? || \ldots)$. This is to
+emphasize that the message may be arbitrary, and it may need to include B (thereby
+excluding the use of public key recovery as an alternative to this scheme).
+
+
+First we substitute the shares of $$K^{-1} \equiv \mu_1 + \cdots + \mu_n \mod N$$ and of the secret key $A = \alpha_1 + \cdots \alpha_n \mod N$ into our equation. 
+$$s \equiv (\mu_1 + \ldots + \mu_n)\cdot(M + r\cdot(\alpha_1 + \ldots + \alpha_n)) \mod N$$
+
+To simplify this expression, we distribute the $r$ value over the sum of $\alpha_i$ secret shares and isolate just the first share (i.e., the protocol leader's) to sum with the message.
+
+$$s \equiv (\mu_1 + \ldots + \mu_n)\cdot(M + (r \cdot \alpha_1 + \ldots + r \cdot\alpha_n)) \mod N$$
+$$s \equiv (\mu_1 + \ldots + \mu_n)\cdot((M + r \cdot \alpha_1) + r \cdot \alpha_2 + \ldots + r \cdot\alpha_n) \mod N$$
+
+For convenience, we rewrite the right-hand factors as secrets $\eta_i$.
+
+$$s \equiv (\mu_1 + \ldots + \mu_n)\cdot(\eta_1 + \ldots + \eta_n) \mod N$$
+
+
+Then, we distribute the sum of the $K^{-1}$ shares $\mu_i$ over the nonce-blinded secret key terms.
+
+$$s \equiv (\mu_1 + \ldots + \mu_n)\cdot \eta_1 + \ldots + (\mu_1 + \ldots + \mu_n)\cdot \eta_n \mod N$$
+
+And we replace each individual operation with an oblivious transfer multiplication.
+$$s \equiv \sum_{i=1}^{n}\sum_{j=1}^n \mulOT(\mu_j, \eta_i) \mod N$$
+
+
+
+One of the terms can be optimized to not use an Oblivious Transfer Multiplication, when $i=j$
+
+$$s \equiv \sum_{i=1}^n \mu_i\cdot \eta_i +\sum_{i=1}^{n}\sum_{j=1, j \neq i}^n \mulOT(\mu_j, \eta_i) \mod N$$
+
+
+Running the Oblivious Transfer Multiplication operations results in $n^2$ terms, denoted $\gamma_{i,j}$ for the term the $ith$ participant learns from the interaction with the $jth$ participant.
+
+$$s \equiv \gamma_{1,1} + \ldots + \gamma_{n,n} \mod N$$
+
+Each participant uniquely learns $n$ of the terms, they sum up the $n$ terms that they learns into $\Gamma_i \equiv \sum_{j=1}^n \gamma_{i,j} \mod N$.
+
+Now, the participants reveal only their $\Gamma_i$ to the other participants, and all parties compute the sum.
+
+$$\Gamma \equiv \Gamma_1 + \ldots + \Gamma_n \mod N$$
+
+Revealing $\Gamma_i$ plaintext is information theoretically secure because there are $n+2$ terms known to each participant uniquely ($n-1$ oblivious transfer multiplication shares $\gamma_{i,j\neq i}$, 1 $\mu_i$, 1 $k_i$, and 1 $\eta_i$. Even if an adversary knew every other $\gamma_{j, k}$, $\mu_j$, $k_j$, and $\eta_j$, they could only solve to $n$ equations relating $n+2$ unknowns. Thus, as there are more unknowns kept secret by the $i$th participant, no new information is revealed.
+
+
+Lastly to finish constructing the signature, we compute:
+
+$$s \equiv \Gamma \mod N$$ 
+And finalize the signature as:
+$$\sigma = (r, s)$$
+
+
+
+Now, we verify $\sigma$ is a standard-conforming ECDSA against the public key
+$B$ for message $M$.
+
+If the signature verifies, this serves as a consistency check that the signature was honestly computed and no key data was leaked.
 
 
 
@@ -155,6 +330,230 @@ $B$ for message $H(B || \ldots)$.
 If we run a single round of Reusable Nonce Generation, we may run $P$ rounds of
 Single Use Key Generation and Single Signing. Provided all ECDSA verifications
 succeed, we have successfully signed $P$ messages for $P$ unique keys that are
-unforgeable by any $t < n$ party
+unforgeable by any $t < n$ party.
+
+\section{Use Cases}
+
+This signature scheme is secure for pre-signing a tree of transactions and then creating the root parent transaction. Because of the semi-honest model, it is not secure for non-presigned use cases.
+
+All of these use cases work with either Schnorr signatures (with modification to Bitcoin), or in plaintext multisig (with cost of scalability and bound on number of participants).
+
+
+
+\subsection{Certified Post Dated UTXOs}
+
+A group of participants can construct a tree of presigned transactions that they are willing to accept as a payment from another set of participants.
+
+The payees submit to the payers a request for an unsigned transaction which pays out the desired balance to an aggregated key.
+
+The payer builds such a transaction, selecting their preferred inputs.
+
+They payees, upon receiving this TXID, generate a binary tree of presigned transactions which pays out each participant at the leafs.
+
+The payees, upon finishing the tree construction, instruct the payer to complete the payment.
+
+The overall overhead of this protocol is $2*N$ transactions, and for each individual $\log N$ transactions. For an participants redeeming randomly, the expected overhead is $2$ transactions.
+
+This is sort of like a Certified cheque in that the balance is guaranteed, and is like a post-dated cheque in that the balance is only redeemable at some time later, hence the name. CPDU for short!
+
+\subsection{UTXO Compression}
+
+An untrusting group of participants can perform the above CPDU protocol with all of their outstanding UTXOs.
+
+Then, at a time later, only when needed, they can quickly ($O(\log N)$, $E[O(1)]$) re-create their desired UTXO.
+
+This is similar to UTXO Commitment Proofs, but it uses on-chain bandwidth to expand the transactions.
+
+\subsection{CoinJoin}
+
+Using Mixnets to mask which participant selects which outputs, CPDU protocol can be used to make a more efficient CoinJoin which has delayed revelation of what the outputs are. Because of the key-aggregation, the branches of the coinjoin are indistinguishable from future payments.
+
+\subsection{Branching Protocols}
+
+If the CPDU protocol is done with multiple alternative branches (requiring a number of reusable nonces equal to the max branch width), CPDU can be used to develop complicated smart contracts which depend on other data or UTXOs which may be only potentially available.
+
+
+
+\section{Example Implementation}
+This algorithm is implemented in Python below, to demonstrate how the methods might be implemented. It uses Paillier Encryption rather than ElGamal.
+\begin{lstlisting}[language=Python]
+import phe
+from ecdsa import SECP256k1 as secp
+from ecdsa import numbertheory as nt
+from ecdsa.ecdsa import Signature, Public_key
+import os
+import binascii
+import functools
+import itertools
+import hashlib
+
+N = 10
+
+def mk_message(m, pk):
+    h = hashlib.sha256()
+    h.update(str(pk).encode('utf-8'))
+    h.update(m.encode('utf-8'))
+    return int(binascii.hexlify(h.digest()), 16)
+def nonce():
+    """ Generate a nonce in range with rejection sampling"""
+    i = int(binascii.hexlify(os.urandom(32)), 16)
+    if i > secp.order:
+        return nonce()
+    else:
+        return i
+def sum_keys(keys):
+    # Can Precommit to keys if needed for security!
+    base = secp.generator*0
+    for key in keys:
+        base += key
+    return base
+def inverse(k, n = secp.order):
+    return nt.inverse_mod(k, n)
+class SecureMulInitiator:
+    def __init__(self, keycache=None):
+        if keycache is None:
+            pk, sk = phe.paillier.generate_paillier_keypair()
+            self.pk = pk
+            self.sk = sk
+        else:
+            self.pk = keycache[0]
+            self.sk = keycache[1]
+        self.result = []
+    def start_protocol(self, val):
+        # Participant only learns a ciphertext, 
+        # and a handle to communicate back a result
+        return SecureMulParticipant(self.result,
+        	 self.pk.encrypt(val % secp.order))
+    def finish_protocol(self):
+        return self.sk.decrypt(self.result.pop()) % secp.order
+
+class SecureMulParticipant:
+    def __init__(self, result, ciphertext):
+        self.result = result
+        self.ciphertext = ciphertext
+    def mul(self, beta):
+        # Create participants share at random
+        share = nonce()
+        # Compute initiator's share homomorphically
+        # They learn nothing of the participant's share
+        # nor of their value, beta
+        self.result.append(self.ciphertext * (beta % secp.order) - share)
+        return share
+
+def secure_mul(alpha, beta, keycache=None):
+    # Convenience wrapper around SecureMul Protocol
+    alice = SecureMulInitiator(keycache)
+    protocol = alice.start_protocol(alpha)
+    bob_result = protocol.mul(beta)
+    alice_result = alice.finish_protocol()
+
+    # Assert that the computation was correct -- ordinarily not possible
+    assert((alice_result + bob_result)%secp.order == (alpha * beta) % secp.order)
+    return (alice_result, bob_result)
+def generate_keys():
+    skeys = [nonce() for _ in range(N)]
+    pkeys = [secp.generator*skey for skey in skeys]
+    pkey = Public_key(secp.generator, sum_keys(pkeys))
+    phe_keycache = generate_phe_keycache()
+    return skeys, pkey, phe_keycache
+def generate_phe_keycache():
+    return [phe.paillier.generate_paillier_keypair() for _ in range(N)]
+def generate_r_and_kinv_shares(phe_keycache):
+    ks = [nonce() for _ in range(N)]
+    k_invs = list(map(inverse, ks))
+
+    R = functools.reduce(lambda a,b: a*b, ks, secp.generator)
+    r = R.x() % secp.order
+    assert(r!=0)
+
+    print("r Value Generated")
+
+    print("computing k^-1 shares")
+
+    # Generate shares s_i of k^-1 such that k_i = \sum s_i
+    shares = [k_invs[0]]
+    for (keypair, k_inv) in zip(phe_keycache, k_invs[1:]):
+        shares_for_inv_holder = 0
+        other_shares = []
+        # Multiply each inverse share by each 'other share'
+        # we can aggregate all of these results for each inverse as we go
+        # and then append it to the 'other shares'
+
+        # This way our total number of shares is at most N
+        # rather than 2^N if we didn't collapse the shares
+        # for each inverse
+        for share in shares:
+            t_inv_holder, t_other = secure_mul(k_inv, share, keypair)
+            other_shares.append(t_other)
+            shares_for_inv_holder += t_inv_holder
+            shares_for_inv_holder %= secp.order
+        other_shares.append(shares_for_inv_holder)
+        shares = other_shares
+    print("k^-1 shares computed")
+    # Assert that our additive shares represent 
+    # the product of the inverses (mod order)
+    assert(sum(shares) % secp.order ==
+       functools.reduce(lambda a,b: a*b, k_invs, 1) % secp.order)
+    return r, shares
+
+def compute_shares_product(arr1, arr2, phe_keycache):
+    assert(len(arr1) == len(arr2) == len(phe_keycache))
+
+    # (t_1 + ... + t_n) * (u_1 + ... + u_n) = s_1 + ... + s_n
+    results = len(arr1)*[0]
+    # So we generate a list of all the t_i*u_j calculations to do
+    ops = itertools.product(range(len(arr1)), range(len(arr1)))
+    # And then we do them!
+    for (i, j) in ops:
+        if i == j:
+            # Skip secure_mul if we know both terms
+            results[i] += arr1[i]*arr2[i]
+
+            results[i] %= secp.order
+        else:
+
+            t_i, t_j = secure_mul(arr1[i], arr2[j], phe_keycache[i])
+            results[i] += t_i
+            results[j] += t_j
+
+            results[j] %= secp.order
+            results[i] %= secp.order
+    return results
+
+def sign(pk, sks, m, phe_keycache):
+    # Pick a message which includes our pkey
+    M = mk_message(m, pkey)
+    r, k_inv_shares = generate_r_and_kinv_shares(phe_keycache)
+
+    # Our goal is to compute k^-1 * (M + r*sk)
+
+    # We first multiply each sk by r
+    rsks = list(map(lambda a: (a*r) % secp.order, skeys))
+
+    # And to just the first one, we add M
+    rsks[0] += M
+    rsks[0] %= secp.order
+
+    print("computing s shares...")
+    s_i = compute_shares_product(k_inv_shares, rsks, phe_keycache)
+    print("s shares computed")
+
+    # Reveal and sum all s_i (can precommit if needed)
+    s = sum(s_i) % secp.order
+    assert(s!=0)
+    sig = Signature(r,s)
+    assert(pkey.verifies(M, sig))
+    print("sig verified")
+    return sig
+
+
+skeys, pkey, phe_keycache = generate_keys()
+print("Keys Generated")
+sign(pkey, skeys, "Test Message!", phe_keycache)
+
+
+\end{lstlisting}
+
+
 
 \end{document}
