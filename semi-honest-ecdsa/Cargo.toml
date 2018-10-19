@@ -7,3 +7,4 @@ edition = "2018"
 [dependencies]
 secp256k1 = "0.11.2"
 rand = "0.5"
+sha2 = "0.8.0"
