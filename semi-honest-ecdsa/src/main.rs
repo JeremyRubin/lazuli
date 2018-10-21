@@ -1,10 +1,12 @@
-#![feature(const_let)]
+
+#![feature(test)]
+extern crate test;
 extern crate rand;
 extern crate secp256k1;
 extern crate sha2;
 mod protocol;
-mod scalars;
 mod util;
+mod scalars;
 use crate::util::*;
 use rand::prelude::*;
 
