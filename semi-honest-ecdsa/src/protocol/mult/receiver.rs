@@ -14,7 +14,12 @@ pub fn run(beta: &scalars::scalar, peer: &mut dyn ReadWrite) -> scalars::scalar 
     let ctx = &secp256k1::Secp256k1::new();
     // MSB to LSB
     for choice in scalars::bytes_from_scalar(beta).iter() {
-        tx.send(protocol::ot::receiver::run(ctx, *choice, xor_decipher_scalar, peer));
+        tx.send(protocol::ot::receiver::run(
+            ctx,
+            *choice,
+            xor_decipher_scalar,
+            peer,
+        ));
     }
     r.join().unwrap()
 }
@@ -24,6 +29,7 @@ pub fn run_scale_free(beta: &scalars::scalar, peer: &mut dyn ReadWrite) -> scala
     let r = thread::spawn(move || {
         let mut sigma_beta = [0u64; 4];
         for mut v in rx.iter().take(32) {
+            println!("receiver got value");
             scalars::secp256k1_scalar_add_assign(&mut sigma_beta, &v);
         }
         sigma_beta
@@ -31,7 +37,12 @@ pub fn run_scale_free(beta: &scalars::scalar, peer: &mut dyn ReadWrite) -> scala
     let ctx = &secp256k1::Secp256k1::new();
     // LSB to MSB
     for choice in scalars::bytes_from_scalar(beta).iter().rev() {
-        tx.send(protocol::ot::receiver::run(ctx, *choice, xor_decipher_scalar, peer));
+        tx.send(protocol::ot::receiver::run(
+            ctx,
+            *choice,
+            xor_decipher_scalar,
+            peer,
+        ));
     }
     r.join().unwrap()
 }

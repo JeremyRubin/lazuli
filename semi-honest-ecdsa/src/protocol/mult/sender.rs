@@ -37,7 +37,6 @@ pub fn run_scale_free<T: 'static>(alpha: &scalars::scalar, peer: T) -> scalars::
 where
     T: ReadWrite + HasTryClone + Send,
 {
-
     let mut neg_sigma_alpha = [0u64; 4];
     {
         // MSB to LSB

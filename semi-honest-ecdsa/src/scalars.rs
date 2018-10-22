@@ -71,9 +71,13 @@ pub fn secp256k1_scalar_set_b32(b32: &[u8; 32]) -> scalar {
     let mut r = [0u64; 4];
     let mut i = 0;
     for x in 0..=3 {
-        r[x] = b32[31 - i] as u64 | (b32[30 - i] as u64) << 8 | (b32[29 - i] as u64) << 16
-            | (b32[28 - i] as u64) << 24 | (b32[27 - i] as u64) << 32
-            | (b32[26 - i] as u64) << 40 | (b32[25 - i] as u64) << 48
+        r[x] = b32[31 - i] as u64
+            | (b32[30 - i] as u64) << 8
+            | (b32[29 - i] as u64) << 16
+            | (b32[28 - i] as u64) << 24
+            | (b32[27 - i] as u64) << 32
+            | (b32[26 - i] as u64) << 40
+            | (b32[25 - i] as u64) << 48
             | (b32[24 - i] as u64) << 56;
         i += 8;
     }
@@ -172,6 +176,252 @@ pub fn random_scalar() -> scalar {
 pub fn assign_add(s: &mut [scalar; 256], c: &scalar) {
     for a in s.iter_mut() {
         secp256k1_scalar_add_assign(a, c);
+    }
+}
+
+pub fn muladd2(a: u64, b: u64, c: &mut (u64, u64, u64)) {
+    let mut t: u128 = (a as u128) * b as u128;
+    let mut th: u64 = (t >> 64) as u64; /* at most 0xFFFFFFFFFFFFFFFE */
+
+    let mut tl = t as u64;
+    let (mut th2, ov1) = th.overflowing_add(th); /* at most 0xFFFFFFFFFFFFFFFE (in case th was 0x7FFFFFFFFFFFFFFF) */
+
+    c.2 += ov1 as u64; /* never overflows by contract (verified the next line) */
+
+    debug_assert!((th2 >= th) || (c.2 != 0));
+    let (mut tl2, ov2) = tl.overflowing_add(tl); /* at most 0xFFFFFFFFFFFFFFFE (in case the lowest 63 bits of tl were 0x7FFFFFFFFFFFFFFF) */
+
+    th2 += ov2 as u64; /* at most 0xFFFFFFFFFFFFFFFF */
+
+    let (c0_new, ov3) = c.0.overflowing_add(tl2); /* overflow is handled on the next line */
+
+    c.0 = c0_new;
+    th2 += ov3 as u64; /* second overflow is handled on the next line */
+
+    c.2 += (ov3 & (th2 == 0)) as u64; /* never overflows by contract (verified the next line) */
+
+    debug_assert!(!ov3 || (th2 != 0) || (c.2 != 0));
+    let (c1_new, ov4) = c.1.overflowing_add(th2);
+    c.1 = c1_new;
+    c.2 += ov4 as u64; /* never overflows by contract (verified the next line) */
+
+    debug_assert!(!ov4 || (c.2 != 0));
+}
+
+fn muladd_fast(a: u64, b: u64, c: &mut (u64, u64, u64)) {
+    let t: u128 = a as u128 * b as u128;
+    let mut th = (t >> 64) as u64; /* at most 0xFFFFFFFFFFFFFFFE */
+    let tl = t as u64;
+    let (c0_new, overflowed) = c.0.overflowing_add(tl);
+    c.0 = c0_new; /* overflow is handled on the next line */
+
+    th += overflowed as u64; /* at most 0xFFFFFFFFFFFFFFFF */
+
+    c.1 += th; /* never overflows by contract (verified in the next line) */
+
+    debug_assert!(c.1 >= th);
+}
+
+fn muladd(a: u64, b: u64, c: &mut (u64, u64, u64)) {
+    let t: u128 = a as u128 * b as u128;
+    let mut th = (t >> 64) as u64; /* at most 0xFFFFFFFFFFFFFFFE */
+    let tl = t as u64;
+    let (c0_new, overflowed) = c.0.overflowing_add(tl);
+    c.0 = c0_new; /* overflow is handled on the next line */
+
+    th += overflowed as u64; /* at most 0xFFFFFFFFFFFFFFFF */
+
+    let (c1_new, overflowed2) = c.1.overflowing_add(th);
+    c.1 = c1_new; /* overflow is handled on the next line */
+
+    c.2 += overflowed2 as u64; /* never overflows by contract (verified in the next line) */
+
+    debug_assert!((c.1 >= th) || (c.2 != 0));
+}
+
+/** Extract the lowest 64 bits of (c0,c1,c2) into n, and left shift the number 64 bits. */
+fn extract(n: &mut u64, c: &mut (u64, u64, u64)) {
+    *n = c.0;
+    c.0 = c.1;
+    c.1 = c.2;
+    c.2 = 0;
+}
+
+/** Extract the lowest 64 bits of (c0,c1,c2) into n, and left shift the number 64 bits. c2 is required to be zero. */
+fn extract_fast(n: &mut u64, c: &mut (u64, u64, u64)) {
+    debug_assert!(c.2 == 0);
+    *n = c.0;
+    c.0 = c.1;
+    c.1 = 0;
+}
+
+pub fn secp256k1_scalar_mul_512(a: &scalar, b: &scalar) -> [u64; 8] {
+    let mut l = [0u64; 8];
+    let mut c = (0, 0, 0);
+    let c = &mut c;
+
+    /* l[0..7] = a[0..3] * b[0..3]. */
+    muladd_fast(a[0], b[0], c);
+    extract_fast(&mut l[0], c);
+    muladd(a[0], b[1], c);
+    muladd(a[1], b[0], c);
+    extract(&mut l[1], c);
+    muladd(a[0], b[2], c);
+    muladd(a[1], b[1], c);
+    muladd(a[2], b[0], c);
+    extract(&mut l[2], c);
+    muladd(a[0], b[3], c);
+    muladd(a[1], b[2], c);
+    muladd(a[2], b[1], c);
+    muladd(a[3], b[0], c);
+    extract(&mut l[3], c);
+    muladd(a[1], b[3], c);
+    muladd(a[2], b[2], c);
+    muladd(a[3], b[1], c);
+    extract(&mut l[4], c);
+    muladd(a[2], b[3], c);
+    muladd(a[3], b[2], c);
+    extract(&mut l[5], c);
+    muladd_fast(a[3], b[3], c);
+    extract_fast(&mut l[6], c);
+    debug_assert!(c.1 == 0);
+    l[7] = c.0;
+    l
+}
+
+pub fn secp256k1_scalar_sqr_512(a: &scalar) -> [u64; 8] {
+    let mut l = [0u64; 8];
+    let mut c = (0, 0, 0);
+    let c = &mut c;
+    /* 160 bit accumulator. */
+    /* l[0..7] = a[0..3] * b[0..3]. */
+    muladd_fast(a[0], a[0], c);
+    extract_fast(&mut l[0], c);
+    muladd2(a[0], a[1], c);
+    extract(&mut l[1], c);
+    muladd2(a[0], a[2], c);
+    muladd(a[1], a[1], c);
+    extract(&mut l[2], c);
+    muladd2(a[0], a[3], c);
+    muladd2(a[1], a[2], c);
+    extract(&mut l[3], c);
+    muladd2(a[1], a[3], c);
+    muladd(a[2], a[2], c);
+    extract(&mut l[4], c);
+    muladd2(a[2], a[3], c);
+    extract(&mut l[5], c);
+    muladd_fast(a[3], a[3], c);
+    extract_fast(&mut l[6], c);
+    debug_assert!(c.1 == 0);
+    l[7] = c.0;
+    l
+}
+
+/** Add a to the number defined by (c0,c1,c2). c2 must never overflow. */
+fn sumadd(a: u64, c: &mut (u64, u64, u64)) {
+    let (c0_new, over) = c.0.overflowing_add(a);
+    c.0 = c0_new;
+    let (c1_new, over2) = c.1.overflowing_add(over as u64); /* overflow is handled on the next line */
+    c.1 = c1_new;
+    c.2 += over2 as u64; /* never overflows by contract */
+}
+
+/** Add a to the number defined by (c0,c1). c1 must never overflow, c2 must be zero. */
+fn sumadd_fast(a: u64, c: &mut (u64, u64, u64)) {
+    let (c0_new, over) = c.0.overflowing_add(a);
+    c.0 = c0_new;
+    c.1 = c.1.wrapping_add(over as u64); /* overflow is handled on the next line */
+    debug_assert!((c.1 != 0) | (c.0 >= a));
+    debug_assert!(c.2 == 0);
+}
+
+pub fn secp256k1_scalar_reduce_512(l: &[u64; 8]) -> scalar {
+    let mut p0 = 0;
+    let mut p1 = 0;
+    let mut p2 = 0;
+    let mut p3 = 0;
+    let mut p4 = 0u32;
+    {
+        let mut c = (0, 0, 0);
+        let c = &mut c;
+        let n = (l[4], l[5], l[6], l[7]);
+        let mut m0 = 0;
+        let mut m1 = 0;
+        let mut m2 = 0;
+        let mut m3 = 0;
+        let mut m4 = 0;
+        let mut m5 = 0;
+        let mut m6 = 0u32;
+        /* Reduce 512 bits into 385. */
+        /* m[0..6] = l[0..3] + n[0..3] * SECP256K1_N_C. */
+        *c = (l[0], 0, 0);
+        muladd_fast(n.0, SECP256K1_N_C_0, c);
+        extract_fast(&mut m0, c);
+        sumadd_fast(l[1], c);
+        muladd(n.1, SECP256K1_N_C_0, c);
+        muladd(n.0, SECP256K1_N_C_1, c);
+        extract(&mut m1, c);
+        sumadd(l[2], c);
+        muladd(n.2, SECP256K1_N_C_0, c);
+        muladd(n.1, SECP256K1_N_C_1, c);
+        sumadd(n.0, c);
+        extract(&mut m2, c);
+        sumadd(l[3], c);
+        muladd(n.3, SECP256K1_N_C_0, c);
+        muladd(n.2, SECP256K1_N_C_1, c);
+        sumadd(n.1, c);
+        extract(&mut m3, c);
+        muladd(n.3, SECP256K1_N_C_1, c);
+        sumadd(n.2, c);
+        extract(&mut m4, c);
+        sumadd_fast(n.3, c);
+        extract_fast(&mut m5, c);
+        debug_assert!(c.0 <= 1);
+        m6 = c.0 as u32;
+
+        /* Reduce 385 bits into 258. */
+        /* p[0..4] = m[0..3] + m[4..6] * SECP256K1_N_C. */
+        *c = (m0, 0, 0);
+        muladd_fast(m4, SECP256K1_N_C_0, c);
+        extract_fast(&mut p0, c);
+        sumadd_fast(m1, c);
+        muladd(m5, SECP256K1_N_C_0, c);
+        muladd(m4, SECP256K1_N_C_1, c);
+        extract(&mut p1, c);
+        sumadd(m2, c);
+        muladd(m6 as u64, SECP256K1_N_C_0, c);
+        muladd(m5, SECP256K1_N_C_1, c);
+        sumadd(m4, c);
+        extract(&mut p2, c);
+        sumadd_fast(m3, c);
+        muladd_fast(m6 as u64, SECP256K1_N_C_1, c);
+        sumadd_fast(m5, c);
+        extract_fast(&mut p3, c);
+        p4 = c.0 as u32 + m6;
+        debug_assert!(p4 <= 2);
+    }
+
+    /* Reduce 258 bits into 256. */
+    /* r[0..3] = p[0..3] + p[4] * SECP256K1_N_C. */
+
+    {
+        let mut r = [0; 4];
+        let mut c: u128 = p0 as u128 + SECP256K1_N_C_0 as u128 * p4 as u128;
+        r[0] = c as u64;
+        c >>= 64;
+        c += p1 as u128 + SECP256K1_N_C_1 as u128 * p4 as u128;
+        r[1] = c as u64;
+        c >>= 64;
+        c += p2 as u128 + p4 as u128;
+        r[2] = c as u64;
+        c >>= 64;
+        c += p3 as u128;
+        r[3] = c as u64;
+        c >>= 64;
+        /* Final reduction of r. */
+        let overflow = (c > 0) | secp256k1_scalar_check_overflow(&r);
+        secp256k1_scalar_reduce(&mut r, overflow);
+        return r;
     }
 }
 
@@ -299,5 +549,200 @@ mod tests {
         let v: Vec<_> = (0..256).map(|i| [i, 0, 0, 0]).collect();
         assert_eq!(v, &y[..]);
     }
+    #[test]
+    fn scalar_mul_correct() {
+        let ctx = &secp256k1::Secp256k1::new();
+        let mut alpha: [u64; 4] = random();
+        let mut s_alpha = SecretKey::from_slice(ctx, &bytes_from_scalar(&alpha)[..]).unwrap();
+        let mut beta: [u64; 4] = random();
+        let s_beta = SecretKey::from_slice(ctx, &bytes_from_scalar(&beta)[..]).unwrap();
+        let mut r = secp256k1_scalar_mul(&alpha, &beta);
+        let s_r = SecretKey::from_slice(ctx, &bytes_from_scalar(&r)[..]).unwrap();
 
+        s_alpha.mul_assign(ctx, &s_beta).unwrap();
+        assert_eq!(s_alpha, s_r);
+    }
+
+    #[test]
+    fn scalar_sqr_correct() {
+        let ctx = &secp256k1::Secp256k1::new();
+        let mut alpha: [u64; 4] = random();
+        let mut s_alpha = SecretKey::from_slice(ctx, &bytes_from_scalar(&alpha)[..]).unwrap();
+        let mut r = secp256k1_scalar_sqr(&alpha);
+        let s_r = SecretKey::from_slice(ctx, &bytes_from_scalar(&r)[..]).unwrap();
+
+        let s = s_alpha.clone();
+        s_alpha.mul_assign(ctx, &s).unwrap();
+        assert_eq!(s_alpha, s_r);
+    }
+
+    #[test]
+    fn scalar_inv_correct() {
+        let ctx = &secp256k1::Secp256k1::new();
+        let mut alpha: [u64; 4] = random();
+        let mut r = secp256k1_scalar_inverse(&alpha);
+        let check = secp256k1_scalar_mul(&alpha, &r);
+        assert_eq!(check, [1, 0, 0, 0]);
+    }
+
+}
+
+pub fn secp256k1_scalar_mul(a: &scalar, b: &scalar) -> scalar {
+    let l = secp256k1_scalar_mul_512(a, b);
+    secp256k1_scalar_reduce_512(&l)
+}
+
+pub fn secp256k1_scalar_sqr(a: &scalar) -> scalar {
+    let l = secp256k1_scalar_sqr_512(a);
+    secp256k1_scalar_reduce_512(&l)
+}
+
+pub fn secp256k1_scalar_inverse(x: &scalar) -> scalar {
+    /* First compute xN as x ^ (2^N - 1) for some values of N,
+     * and uM as x ^ M for some values of M. */
+
+    let u2 = secp256k1_scalar_sqr(x);
+    let x2 = secp256k1_scalar_mul(&u2, x);
+    let u5 = secp256k1_scalar_mul(&u2, &x2);
+    let x3 = secp256k1_scalar_mul(&u5, &u2);
+    let u9 = secp256k1_scalar_mul(&x3, &u2);
+    let u11 = secp256k1_scalar_mul(&u9, &u2);
+    let u13 = secp256k1_scalar_mul(&u11, &u2);
+
+    let mut x6 = secp256k1_scalar_sqr(&u13);
+    x6 = secp256k1_scalar_sqr(&x6);
+    x6 = secp256k1_scalar_mul(&x6, &u11);
+
+    let mut x8 = secp256k1_scalar_sqr(&x6);
+    x8 = secp256k1_scalar_sqr(&x8);
+    x8 = secp256k1_scalar_mul(&x8, &x2);
+
+    let mut x14 = secp256k1_scalar_sqr(&x8);
+    for _ in 0..5 {
+        x14 = secp256k1_scalar_sqr(&x14);
+    }
+    x14 = secp256k1_scalar_mul(&x14, &x6);
+
+    let mut x28 = secp256k1_scalar_sqr(&x14);
+    for _ in 0..13 {
+        x28 = secp256k1_scalar_sqr(&x28);
+    }
+    x28 = secp256k1_scalar_mul(&x28, &x14);
+
+    let mut x56 = secp256k1_scalar_sqr(&x28);
+    for _ in 0..27 {
+        x56 = secp256k1_scalar_sqr(&x56);
+    }
+    x56 = secp256k1_scalar_mul(&x56, &x28);
+
+    let mut x112 = secp256k1_scalar_sqr(&x56);
+    for _ in 0..55 {
+        x112 = secp256k1_scalar_sqr(&x112);
+    }
+    x112 = secp256k1_scalar_mul(&x112, &x56);
+
+    let mut x126 = secp256k1_scalar_sqr(&x112);
+    for _ in 0..13 {
+        x126 = secp256k1_scalar_sqr(&x126);
+    }
+    x126 = secp256k1_scalar_mul(&x126, &x14);
+
+    /* Then accumulate the final result (t starts at x126). */
+    let t: &mut scalar = &mut x126;
+    for _ in 0..3 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u5); /* 101 */
+    for _ in 0..4 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &x3); /* 111 */
+    for _ in 0..4 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u5); /* 101 */
+    for _ in 0..5 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u11); /* 1011 */
+    for _ in 0..4 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u11); /* 1011 */
+    for _ in 0..4 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &x3); /* 111 */
+    for _ in 0..5 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &x3); /* 111 */
+    for _ in 0..6 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u13); /* 1101 */
+    for _ in 0..4 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u5); /* 101 */
+    for _ in 0..3 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &x3); /* 111 */
+    for _ in 0..5 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u9); /* 1001 */
+    for _ in 0..6 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u5); /* 101 */
+    for _ in 0..10 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &x3); /* 111 */
+    for _ in 0..4 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &x3); /* 111 */
+    for _ in 0..9 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &x8); /* 11111111 */
+    for _ in 0..5 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u9); /* 1001 */
+    for _ in 0..6 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u11); /* 1011 */
+    for _ in 0..4 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u13); /* 1101 */
+    for _ in 0..5 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &x2); /* 11 */
+    for _ in 0..6 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u13); /* 1101 */
+    for _ in 0..10 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u13); /* 1101 */
+    for _ in 0..4 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, &u9); /* 1001 */
+    for _ in 0..6 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    *t = secp256k1_scalar_mul(t, x); /* 1 */
+    for _ in 0..8 {
+        *t = secp256k1_scalar_sqr(t);
+    }
+    secp256k1_scalar_mul(t, &x6) /* 111111 */
 }
