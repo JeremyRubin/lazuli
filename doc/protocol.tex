@@ -61,15 +61,15 @@ We denote this scheme $\mulOT(a,b) = ab = \tau_a + \tau_b$.
 
 We show how such a scheme can be built from a 1 of 2 Oblivious Transfer assumption.  HL17 presents an efficient scheme for 1-of-N Oblivious Transfer under the Computational Diffie Helman assumption.
 
-\subsection{Efficient Bitwise OT Multiplication Protocol}
+\subsection{Efficient OT Multiplication Protocol}
 
 Alice with an $d$-bit $\alpha$, and a radix $r | d$, computes $\forall j \in 0\cdots 2^d -1. c_j \equiv  a \times j \mod N$.
 
 Alice then picks a set of $\frac{d}{r}$ blinding factors $\phi_i \xleftarrow{R} (0, N)$.
 
-Alice's secret share $\sigma_a \equiv \sum\limits_{i=0}^{r-1} \phi_i \times 256^{i\frac{d}{r}} \mod N$
+Alice's secret share $\sigma_a \equiv \sum\limits_{i=0}^{r-1} \phi_i \mod N$
 
-Alice then computes $\forall i \in [0, \frac{d}{r}). \forall j \in [0, 2^{\frac{d}{r}}). x_{i, j} \equiv c_j - \phi_i \mod N$. In other words, $x_{i,*}$ is a table of the potential blinded results of multiplying $a$ by all possible $\frac{d}{r}$-bit values.
+Alice then computes $\forall i \in [0, \frac{d}{r}). \forall j \in [0, 2^{\frac{d}{r}}). x_{i, j} \equiv c_j 2^{i\frac{d}{r}} - \phi_i \mod N$. In other words, $x_{i,*}$ is a table of the potential blinded results of multiplying $a$ by all possible $\frac{d}{r}$-bit values shifted to the correct magnitude.
 
 For each row of this table, Alice does a $1-of-2^\frac{d}{r}$ Oblivious Transfer. 
 
@@ -78,7 +78,7 @@ If $r = d$, Alice can perform a direct 1-of-2 OT. With $\frac{d}{r} > 1$, and no
 
 
 
-Bob, then inputs his value $\beta$ broken up into $\frac{d}{r}$-bit groups into the OT protocol and learns and sums the results $\sigma_b \equiv \sum\limits_{i=0}^{r-1} x_{i, \beta_i} \times 256^{i\frac{d}{r}} \mod N$.
+Bob, then inputs his value $\beta$ broken up into $\frac{d}{r}$-bit groups into the OT protocol and learns and sums the results $\sigma_b \equiv \sum\limits_{i=0}^{r-1} x_{i, \beta_i} \mod N$.
 
 Thus,
 
@@ -90,16 +90,22 @@ $$\sigma_a + \sigma_b = \alpha \cdot \beta$$
 An optimal selection of parameters for this protocol is $r=d$. Switching to a different radix, say $r=32$, would result in the Oblivious Transfer of $8*32$ 256 bit keys which is identical to doing $256$ 256-bit Oblivious Transfers. but with a larger ciphertext to share. Indeed, for any $r$ the number of Oblivious Transfers required is constant. Thus, concretely:
 
 $$x =\begin{bmatrix}
--\phi_0 & \alpha - \phi_0 \\
+0 & \alpha  \\
 \vdots & \vdots \\
--\phi_i & \alpha - \phi_i \\
+0 & \alpha 2^{i} \\
 \vdots & \vdots \\
--\phi_{255} & \alpha - \phi_{255}
+0 & \alpha  2^{255} 
+\end{bmatrix}- \begin{bmatrix}
+\phi_0 \\
+\vdots\\
+\phi_i\\
+\vdots\\
+\phi_{255}
 \end{bmatrix}$$
 
 And Bob learns, through oblivious transfer:
 
-$$s = 
+$$\sigma_{\beta} = 
 \left(x \odot \begin{bmatrix}
 \beta_0 = 0 & \beta_0 = 1 \\
 \vdots & \vdots \\
@@ -111,21 +117,6 @@ $$s =
 1 \\ 1
 \end{bmatrix}
 $$
-
-And then Bob computes
-$$\sigma_{\beta} \equiv 
-\begin{bmatrix}
-2^0 & 2^1 &\cdots& 2^i & \cdots& 2^{255}
-\end{bmatrix}
-\left(x \odot \begin{bmatrix}
-\beta_0 = 0 & \beta_0 = 1 \\
-\vdots & \vdots \\
-\beta_i = 0 & \beta_i = 1 \\
-\vdots & \vdots \\
-\beta_{255} = 0 & \beta_{255} = 1
-\end{bmatrix}\right) \cdot \begin{bmatrix}
-1\\ 1
-\end{bmatrix} \mod N$$
 
 
 
@@ -139,17 +130,21 @@ With an optimized 1-of-N OT which transfers 256 Bit Keys, like HL17, we are free
 
 $$ x = \alpha \begin{bmatrix}
 0 & 1& \cdots & 255\\
+\vdots & \vdots & \ddots & \vdots &\\
+0 & 2^{8i} & \cdots & 255 \cdot 2^{8i}\\
 \vdots &\vdots & \ddots & \vdots\\
-0 & 1 & \cdots & 255
+0 & 2^{248} & \cdots & 255 \cdot 2^{248}\\
 \end{bmatrix} - \begin{bmatrix}
 \phi_0 \\
+\vdots\\
+\phi_i\\
 \vdots\\
 \phi_{31}
 \end{bmatrix}
 $$
 And Bob learns, through oblivious transfer:
 
-$$s = 
+$$\sigma_b = 
 \left(x \odot \begin{bmatrix}
 \beta_0 = 0 & \beta_0 = 1  & \cdots & \beta_0 = 255 \\
 \vdots & \vdots \\
@@ -162,21 +157,7 @@ $$s =
 \end{bmatrix}
 $$
 
-And then Bob computes
-$$\sigma_{\beta} \equiv 
-\begin{bmatrix}
-2^0 & 2^7 &\cdots& 2^{8i -1} & \cdots& 2^{247}
-\end{bmatrix}
-\left(x \odot \begin{bmatrix}
-\beta_0 = 0 & \beta_0 = 1  & \cdots & \beta_0 = 255 \\
-\vdots & \vdots \\
-\beta_i = 0 & \beta_i = 1 & \cdots & \beta_i = 255  \\
-\vdots & \vdots & \ddots & \vdots \\
-\beta_{31} = 0 & \beta_{31} = 1 & \cdots & \beta_{31} = 255
-\end{bmatrix}\right)
-\begin{bmatrix}
-1 \\ \vdots \\ 1
-\end{bmatrix} \mod N$$
+
 
 
 
