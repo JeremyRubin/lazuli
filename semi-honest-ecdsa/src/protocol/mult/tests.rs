@@ -24,70 +24,53 @@ fn verify_shares(
 }
 fn test_mult<S: 'static, R: 'static>(sender: S, receiver: R)
 where
-    S: Fn(&scalars::scalar, UnixStream) -> scalars::scalar,
-    R: Fn(&scalars::scalar, &mut dyn ReadWrite) -> scalars::scalar,
-    R: Send,
-    S: Send,
+    S: Fn(&scalars::scalar, UnixStream) -> (scalars::scalar, thread::JoinHandle<()>),
+    R: Fn(&scalars::scalar, UnixStream) -> thread::JoinHandle<scalars::scalar>,
 {
     let (mut sock1, mut sock2) = UnixStream::pair().unwrap();
     let h2 = {
-        thread::spawn(move || {
-            let secret = crate::scalars::random_scalar();
-            let share = sender(&secret, sock1);
-            (secret, share)
-        })
+        let secret = crate::scalars::random_scalar();
+        let share = sender(&secret, sock1).0;
+        (secret, share)
     };
     let h1 = {
-        thread::spawn(move || {
-            let secret = crate::scalars::random_scalar();
-            let share = receiver(&secret, &mut sock2.try_clone().unwrap());
-            (secret, share)
-        })
+        let secret = crate::scalars::random_scalar();
+        let share = receiver(&secret, sock2);
+        (secret, share)
     };
 
-    let (mut a, mut s_a) = h1.join().unwrap();
-    let (mut b, mut s_b) = h2.join().unwrap();
+    let (mut a, mut s_a) = h2;
+    let (mut b, th) = h1;
+    let mut s_b = th.join().unwrap();
     verify_shares(a, b, s_a, s_b);
 }
 
-#[derive(Clone)]
-struct Receiver<T>(T);
-impl<T> Receiver<T>
+fn bench_setup<R: 'static>(receiver: R) -> UnixStream
 where
-    T: 'static,
-    T: Send + Clone,
-    T: Fn(&scalars::scalar, &mut dyn ReadWrite) -> scalars::scalar,
-{
-    fn call(&self, s: &scalars::scalar, r: &mut dyn ReadWrite) -> scalars::scalar {
-        self.0(s, r)
-    }
-}
-
-fn bench_setup<R: 'static>(receiver: Receiver<R>) -> UnixStream
-where
-    R: Send + Clone,
-    R: Fn(&scalars::scalar, &mut dyn ReadWrite) -> scalars::scalar,
+    R: Send,
+    R: Fn(&scalars::scalar, UnixStream) -> thread::JoinHandle<scalars::scalar>,
 {
     let (mut sock1, mut sock2) = UnixStream::pair().unwrap();
 
     thread::spawn(move || {
         let secret = crate::scalars::random_scalar();
-        let share = receiver.call(&secret, &mut sock2);
+        let share = receiver(&secret, sock2).join().unwrap();
     });
 
     sock1
 }
-fn bench_mult<S: 'static, R: 'static>(sender: S, receiver: Receiver<R>, b: &mut Bencher)
+fn bench_mult<S: 'static, R: 'static>(sender: S, receiver: R, b: &mut Bencher)
 where
-    S: Fn(&scalars::scalar, UnixStream) -> scalars::scalar,
-    R: Fn(&scalars::scalar, &mut dyn ReadWrite) -> scalars::scalar,
+    S: Fn(&scalars::scalar, UnixStream) -> (scalars::scalar, thread::JoinHandle<()>),
+    R: Fn(&scalars::scalar, UnixStream) -> thread::JoinHandle<scalars::scalar>,
     R: Send + Sync + Clone,
     S: Send,
 {
     b.iter(|| {
         let sock = bench_setup(receiver.clone());
         let secret = crate::scalars::random_scalar();
-        let share = sender(&secret, sock);
+        let (share, th) = sender(&secret, sock);
+        //th.join().unwrap();
     });
 }
 
@@ -108,7 +91,7 @@ fn scale_free() {
 fn bench_scaled_mult(b: &mut Bencher) {
     bench_mult(
         protocol::mult::sender::run,
-        Receiver(protocol::mult::receiver::run),
+        (protocol::mult::receiver::run),
         b,
     );
 }
@@ -117,7 +100,7 @@ fn bench_scaled_mult(b: &mut Bencher) {
 fn bench_scale_free_mult(b: &mut Bencher) {
     bench_mult(
         protocol::mult::sender::run_scale_free,
-        Receiver(protocol::mult::receiver::run_scale_free),
+        (protocol::mult::receiver::run_scale_free),
         b,
     );
 }

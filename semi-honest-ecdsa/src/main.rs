@@ -8,15 +8,8 @@ mod protocol;
 mod scalars;
 mod util;
 use crate::util::*;
-use rand::prelude::*;
 
 fn main() -> Result<(), secp256k1::Error> {
-    use std::os::unix::net::UnixStream;
-    let (a, b) = UnixStream::pair().unwrap();
-    std::thread::spawn(|| {
-        protocol::ecdsa::twopc::run(&[1, 2, 3, 4], a);
-    });
-    protocol::ecdsa::twopc::run(&[1, 2, 3, 4], b);
     Ok(())
 
     // Structure:
