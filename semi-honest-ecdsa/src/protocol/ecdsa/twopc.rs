@@ -142,7 +142,8 @@ where
 
         // We will request
         // gamma2 = t_0 = s_0
-        let (gamma2, th) = crate::protocol::mult::sender::run_scale_free(&gamma1, peer.try_clone());
+        let (send_gamma1, gamma2, th) = crate::protocol::mult::sender::run_scale_free_stupid_parallel(peer.try_clone());
+        send_gamma1.send(gamma1).ok()?;
         th.join().ok()?;
         // Share it gamma2 to construct fina sig..
         peer.write_all(&crate::scalars::bytes_from_scalar(&gamma2)[..])
@@ -191,16 +192,18 @@ where
         crate::scalars::secp256k1_scalar_set_b32(&xb)
     };
     let s = {
-        // kx = rk2
-        let kx = crate::scalars::secp256k1_scalar_mul(my_tweaked_pk, &r);
         // We Will Request
         // gamma1 = g_2 = d_2
-        let (gamma1, wait_before_send) =
-            crate::protocol::mult::sender::run_scale_free(&kx, peer.try_clone());
+        let (send_kx, gamma1, wait_before_send) =
+            crate::protocol::mult::sender::run_scale_free_stupid_parallel(peer.try_clone());
         // They will request
         // gamma1_in = d_2 * q2 = t_2
         let i_nonce = nonce_pair.1.join().ok()?;
         let gamma1_in = crate::scalars::secp256k1_scalar_mul(&i_nonce, &gamma1);
+
+        // kx = rk2
+        let kx = crate::scalars::secp256k1_scalar_mul(my_tweaked_pk, &r);
+        send_kx.send(kx).ok()?;
         wait_before_send.join().ok()?;
         // gamma2 = t_1
         let gamma2 = {
